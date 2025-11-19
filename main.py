@@ -9,7 +9,7 @@ from database import db, create_document, get_documents
 from schemas import User as UserSchema, Product as ProductSchema, Address as AddressSchema, CartItem as CartItemSchema, Order as OrderSchema
 
 
-app = FastAPI(title="VegHolic API", version="1.0.0")
+app = FastAPI(title="VegHolic API", version="1.1.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -157,17 +157,17 @@ def on_startup():
     ensure_seed_products()
 
 
-@app.get("/", tags=["health"])
+@app.get("/", tags=["health"]) 
 def read_root():
     return {"message": "VegHolic API running"}
 
 
-@app.get("/api/health", tags=["health"])
+@app.get("/api/health", tags=["health"]) 
 def health():
     return {"status": "ok"}
 
 
-@app.get("/schema", tags=["schema"])
+@app.get("/schema", tags=["schema"]) 
 def get_schema():
     # Basic schemas info for viewer
     return {
@@ -176,13 +176,13 @@ def get_schema():
 
 
 # ---------- Auth (Mock OTP) ----------
-@app.post("/api/auth/request-otp", tags=["auth"])
+@app.post("/api/auth/request-otp", tags=["auth"]) 
 def request_otp(payload: OTPRequest):
     # In production, send OTP via SMS. Here we return a static OTP for demo.
     return {"phone": payload.phone, "otp": "1234", "message": "Use 1234 to login (demo)"}
 
 
-@app.post("/api/auth/verify-otp", tags=["auth"])
+@app.post("/api/auth/verify-otp", tags=["auth"]) 
 def verify_otp(payload: OTPVerify):
     if payload.otp != "1234":
         raise HTTPException(status_code=400, detail="Invalid OTP")
@@ -203,17 +203,43 @@ def verify_otp(payload: OTPVerify):
     return {"user_id": user_id, "token": token}
 
 
+# Compatibility endpoints for alternative specs
+@app.post("/api/auth/login", tags=["auth"]) 
+def login_placeholder():
+    # Email/password login not implemented in demo mode
+    raise HTTPException(status_code=501, detail="Email/password login not enabled. Use OTP endpoints: /api/auth/request-otp and /api/auth/verify-otp")
+
+
+@app.post("/api/auth/signup", tags=["auth"]) 
+def signup_placeholder():
+    # Email/password signup not implemented in demo mode
+    raise HTTPException(status_code=501, detail="Email/password signup not enabled. Use OTP endpoints: /api/auth/request-otp and /api/auth/verify-otp")
+
+
 # ---------- Products ----------
-@app.get("/api/products", tags=["products"])
-def list_products(category: Optional[str] = Query(default=None)):
+@app.get("/api/products", tags=["products"]) 
+def list_products(category: Optional[str] = Query(default=None), q: Optional[str] = Query(default=None), page: int = Query(1, ge=1), limit: int = Query(50, ge=1, le=100)):
     filt: Dict[str, Any] = {}
     if category:
         filt["category"] = category
-    products = get_documents("product", filt, None)
-    return ObjectIdEncoder.encode(products)
+    if q:
+        # basic text search on name and description
+        filt["$or"] = [
+            {"name": {"$regex": q, "$options": "i"}},
+            {"description": {"$regex": q, "$options": "i"}},
+        ]
+    skip = (page - 1) * limit
+    total = db["product"].count_documents(filt)
+    products = list(db["product"].find(filt).skip(skip).limit(limit))
+    return {"products": ObjectIdEncoder.encode(products), "total": total, "page": page}
 
 
-@app.get("/api/products/{product_id}", tags=["products"])
+@app.get("/api/search", tags=["products"]) 
+def search_products(q: Optional[str] = Query(default=None), category: Optional[str] = Query(default=None), page: int = Query(1, ge=1), limit: int = Query(20, ge=1, le=100)):
+    return list_products(category=category, q=q, page=page, limit=limit)
+
+
+@app.get("/api/products/{product_id}", tags=["products"]) 
 def get_product(product_id: str):
     prod = db["product"].find_one({"_id": oid(product_id)})
     if not prod:
@@ -235,13 +261,13 @@ def calc_price(price_per_kg: float, variant: str) -> float:
     return round(price_per_kg * m, 2)
 
 
-@app.get("/api/cart", tags=["cart"])
+@app.get("/api/cart", tags=["cart"]) 
 def get_cart(user_id: str = Query(...)):
     items = list(db["cartitem"].find({"user_id": user_id}))
     return ObjectIdEncoder.encode(items)
 
 
-@app.post("/api/cart/add", tags=["cart"])
+@app.post("/api/cart/add", tags=["cart"]) 
 def add_to_cart(payload: AddToCartRequest):
     prod = db["product"].find_one({"_id": oid(payload.product_id)})
     if not prod:
@@ -273,7 +299,7 @@ def add_to_cart(payload: AddToCartRequest):
     return {"item_id": item_id}
 
 
-@app.post("/api/cart/{item_id}/qty", tags=["cart"])
+@app.post("/api/cart/{item_id}/qty", tags=["cart"]) 
 def update_cart_qty(item_id: str, payload: UpdateCartQty):
     if payload.qty < 1:
         raise HTTPException(status_code=400, detail="Quantity must be >= 1")
@@ -283,7 +309,7 @@ def update_cart_qty(item_id: str, payload: UpdateCartQty):
     return {"ok": True}
 
 
-@app.delete("/api/cart/{item_id}", tags=["cart"])
+@app.delete("/api/cart/{item_id}", tags=["cart"]) 
 def remove_cart_item(item_id: str):
     res = db["cartitem"].delete_one({"_id": oid(item_id)})
     if res.deleted_count == 0:
@@ -292,13 +318,13 @@ def remove_cart_item(item_id: str):
 
 
 # ---------- Addresses ----------
-@app.get("/api/addresses", tags=["address"])
+@app.get("/api/addresses", tags=["address"]) 
 def list_addresses(user_id: str = Query(...)):
     items = list(db["address"].find({"user_id": user_id}))
     return ObjectIdEncoder.encode(items)
 
 
-@app.post("/api/addresses", tags=["address"])
+@app.post("/api/addresses", tags=["address"]) 
 def create_address(payload: AddressCreate):
     addr_id = create_document("address", payload)
     if payload.is_default:
@@ -307,7 +333,7 @@ def create_address(payload: AddressCreate):
     return {"address_id": addr_id}
 
 
-@app.patch("/api/addresses/{address_id}", tags=["address"])
+@app.patch("/api/addresses/{address_id}", tags=["address"]) 
 def update_address(address_id: str, payload: dict):
     if not payload:
         return {"ok": True}
@@ -320,7 +346,7 @@ def update_address(address_id: str, payload: dict):
     return {"ok": True}
 
 
-@app.delete("/api/addresses/{address_id}", tags=["address"])
+@app.delete("/api/addresses/{address_id}", tags=["address"]) 
 def delete_address(address_id: str):
     res = db["address"].delete_one({"_id": oid(address_id)})
     if res.deleted_count == 0:
@@ -332,7 +358,7 @@ def delete_address(address_id: str):
 ORDER_STATUSES = ["Order Placed", "Packed", "On The Way", "Delivered"]
 
 
-@app.post("/api/orders/create", tags=["orders"])
+@app.post("/api/orders/create", tags=["orders"]) 
 def create_order(payload: CreateOrderRequest):
     user_id = payload.user_id
     cart = list(db["cartitem"].find({"user_id": user_id}))
@@ -356,13 +382,19 @@ def create_order(payload: CreateOrderRequest):
     return {"order_id": order_id}
 
 
-@app.get("/api/orders", tags=["orders"])
+# Compatibility alias for specs using /api/order/create
+@app.post("/api/order/create", tags=["orders"]) 
+def create_order_alias(payload: CreateOrderRequest):
+    return create_order(payload)
+
+
+@app.get("/api/orders", tags=["orders"]) 
 def list_orders(user_id: str = Query(...)):
     orders = list(db["order"].find({"user_id": user_id}).sort("created_at", -1))
     return ObjectIdEncoder.encode(orders)
 
 
-@app.get("/api/orders/{order_id}", tags=["orders"])
+@app.get("/api/orders/{order_id}", tags=["orders"]) 
 def get_order(order_id: str):
     o = db["order"].find_one({"_id": oid(order_id)})
     if not o:
@@ -370,7 +402,7 @@ def get_order(order_id: str):
     return ObjectIdEncoder.encode(o)
 
 
-@app.get("/api/orders/{order_id}/track", tags=["orders"])
+@app.get("/api/orders/{order_id}/track", tags=["orders"]) 
 def track_order(order_id: str):
     o = db["order"].find_one({"_id": oid(order_id)})
     if not o:
@@ -386,7 +418,13 @@ def track_order(order_id: str):
     return tracking
 
 
-@app.post("/api/orders/{order_id}/advance", tags=["orders"])
+# Compatibility alias for specs using /api/order/track with query param
+@app.get("/api/order/track", tags=["orders"]) 
+def track_order_alias(order_id: str = Query(...)):
+    return track_order(order_id)
+
+
+@app.post("/api/orders/{order_id}/advance", tags=["orders"]) 
 def advance_order(order_id: str):
     o = db["order"].find_one({"_id": oid(order_id)})
     if not o:
@@ -402,7 +440,7 @@ def advance_order(order_id: str):
 
 
 # ---------- Profile ----------
-@app.get("/api/profile", tags=["profile"])
+@app.get("/api/profile", tags=["profile"]) 
 def get_profile(user_id: str = Query(...)):
     u = db["user"].find_one({"_id": oid(user_id)})
     if not u:
@@ -416,7 +454,7 @@ def get_profile(user_id: str = Query(...)):
     }
 
 
-@app.get("/test", tags=["health"])
+@app.get("/test", tags=["health"]) 
 def test_database():
     response = {
         "backend": "✅ Running",
